@@ -78,7 +78,7 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
         {
             Task<bool> enqueueTask = _enqueueFailedTask;
 
-            TaskCompletionSource <bool> enqueueTaskCompletionSource = new TaskCompletionSource<bool>();
+            TaskCompletionSource<bool> enqueueTaskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             CancellationToken enqueueCancellationToken = GetEnqueueCancellationToken(enqueueTaskCompletionSource, cancellationToken);
 
