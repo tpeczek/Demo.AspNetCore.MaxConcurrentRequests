@@ -48,11 +48,16 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares
             }
             else
             {
-                await _next(context);
-
-                if (ShouldDecrementConcurrentRequestsCount())
+                try
                 {
-                    Interlocked.Decrement(ref _concurrentRequestsCount);
+                    await _next(context);
+                }
+                finally
+                {
+                    if (ShouldDecrementConcurrentRequestsCount())
+                    {
+                        Interlocked.Decrement(ref _concurrentRequestsCount);
+                    }
                 }
             }
         }
