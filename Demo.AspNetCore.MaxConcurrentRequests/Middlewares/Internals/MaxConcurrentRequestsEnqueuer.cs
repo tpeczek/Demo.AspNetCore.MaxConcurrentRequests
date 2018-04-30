@@ -13,7 +13,7 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
         }
 
         #region Fields
-        private readonly object _lock = new object();
+        private readonly SemaphoreSlim _queueSemaphore = new SemaphoreSlim(1, 1);
 
         private readonly int _maxQueueLength;
         private readonly DropMode _dropMode;
@@ -34,35 +34,43 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
         #endregion
 
         #region Methods
-        public Task<bool> EnqueueAsync(CancellationToken cancellationToken)
+        public async Task<bool> EnqueueAsync(CancellationToken requestAbortedCancellationToken)
         {
             Task<bool> enqueueTask = _enqueueFailedTask;
 
             if (_maxQueueLength > 0)
             {
-                lock (_lock)
+                CancellationToken enqueueCancellationToken = GetEnqueueCancellationToken(requestAbortedCancellationToken);
+
+                await _queueSemaphore.WaitAsync(enqueueCancellationToken);
+                try
                 {
                     if (_queue.Count < _maxQueueLength)
                     {
-                        enqueueTask = InternalEnqueueAsync(cancellationToken);
+                        enqueueTask = InternalEnqueueAsync(enqueueCancellationToken);
                     }
                     else if (_dropMode == DropMode.Head)
                     {
                         InternalDequeue(false);
 
-                        enqueueTask = InternalEnqueueAsync(cancellationToken);
+                        enqueueTask = InternalEnqueueAsync(enqueueCancellationToken);
                     }
+                }
+                finally
+                {
+                    _queueSemaphore.Release();
                 }
             }
 
-            return enqueueTask;
+            return await enqueueTask;
         }
 
-        public bool Dequeue()
+        public async Task<bool> DequeueAsync()
         {
             bool dequeued = false;
 
-            lock (_lock)
+            await _queueSemaphore.WaitAsync();
+            try
             {
                 if (_queue.Count > 0)
                 {
@@ -70,20 +78,23 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
                     dequeued = true;
                 }
             }
+            finally
+            {
+                _queueSemaphore.Release();
+            }
 
             return dequeued;
         }
 
-        private Task<bool> InternalEnqueueAsync(CancellationToken cancellationToken)
+        private Task<bool> InternalEnqueueAsync(CancellationToken enqueueCancellationToken)
         {
             Task<bool> enqueueTask = _enqueueFailedTask;
 
-            TaskCompletionSource<bool> enqueueTaskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            CancellationToken enqueueCancellationToken = GetEnqueueCancellationToken(enqueueTaskCompletionSource, cancellationToken);
-
             if (!enqueueCancellationToken.IsCancellationRequested)
             {
+                TaskCompletionSource<bool> enqueueTaskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                enqueueCancellationToken.Register(CancelEnqueue, enqueueTaskCompletionSource);
+
                 _queue.AddLast(enqueueTaskCompletionSource);
                 enqueueTask = enqueueTaskCompletionSource.Task;
             }
@@ -91,19 +102,17 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
             return enqueueTask;
         }
 
-        private CancellationToken GetEnqueueCancellationToken(TaskCompletionSource<bool> enqueueTaskCompletionSource, CancellationToken cancellationToken)
+        private CancellationToken GetEnqueueCancellationToken(CancellationToken requestAbortedCancellationToken)
         {
             CancellationToken enqueueCancellationToken = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken,
-                GetTimeoutToken(enqueueTaskCompletionSource)
+                requestAbortedCancellationToken,
+                GetTimeoutToken()
             ).Token;
-
-            enqueueCancellationToken.Register(CancelEnqueue, enqueueTaskCompletionSource);
-
+            
             return enqueueCancellationToken;
         }
 
-        private CancellationToken GetTimeoutToken(TaskCompletionSource<bool> enqueueTaskCompletionSource)
+        private CancellationToken GetTimeoutToken()
         {
             CancellationToken timeoutToken = CancellationToken.None;
 
@@ -112,7 +121,6 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
                 CancellationTokenSource timeoutTokenSource = new CancellationTokenSource();
 
                 timeoutToken = timeoutTokenSource.Token;
-                timeoutToken.Register(CancelEnqueue, enqueueTaskCompletionSource);
 
                 timeoutTokenSource.CancelAfter(_maxTimeInQueue);
             }
@@ -125,9 +133,16 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
             bool removed = false;
 
             TaskCompletionSource<bool> enqueueTaskCompletionSource = ((TaskCompletionSource<bool>)state);
-            lock (_lock)
+
+            // This is blocking, but it looks like this callback can't be asynchronous.
+            _queueSemaphore.Wait();
+            try
             {
                 removed = _queue.Remove(enqueueTaskCompletionSource);
+            }
+            finally
+            {
+                _queueSemaphore.Release();
             }
 
             if (removed)

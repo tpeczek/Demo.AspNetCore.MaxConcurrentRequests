@@ -54,7 +54,7 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares
                 }
                 finally
                 {
-                    if (ShouldDecrementConcurrentRequestsCount())
+                    if (await ShouldDecrementConcurrentRequestsCountAsync())
                     {
                         Interlocked.Decrement(ref _concurrentRequestsCount);
                     }
@@ -92,15 +92,15 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares
             return limitExceeded;
         }
 
-        private async Task<bool> TryWaitInQueueAsync(CancellationToken cancellationToken)
+        private async Task<bool> TryWaitInQueueAsync(CancellationToken requestAbortedCancellationToken)
         {
-            return (_enqueuer != null) && (await _enqueuer.EnqueueAsync(cancellationToken));
+            return (_enqueuer != null) && (await _enqueuer.EnqueueAsync(requestAbortedCancellationToken));
         }
 
-        private bool ShouldDecrementConcurrentRequestsCount()
+        private async Task<bool> ShouldDecrementConcurrentRequestsCountAsync()
         {
             return (_options.Limit != MaxConcurrentRequestsOptions.ConcurrentRequestsUnlimited)
-                && ((_enqueuer == null) || !_enqueuer.Dequeue());
+                && ((_enqueuer == null) || !(await _enqueuer.DequeueAsync()));
         }
         #endregion
     }
