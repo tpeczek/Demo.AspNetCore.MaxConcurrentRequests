@@ -1,4 +1,5 @@
-﻿using System.Threading;
+﻿using System;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 
@@ -42,24 +43,29 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
             {
                 CancellationToken enqueueCancellationToken = GetEnqueueCancellationToken(requestAbortedCancellationToken);
 
-                await _queueSemaphore.WaitAsync(enqueueCancellationToken);
                 try
                 {
-                    if (_queue.Count < _maxQueueLength)
+                    await _queueSemaphore.WaitAsync(enqueueCancellationToken);
+                    try
                     {
-                        enqueueTask = InternalEnqueueAsync(enqueueCancellationToken);
-                    }
-                    else if (_dropMode == DropMode.Head)
-                    {
-                        InternalDequeue(false);
+                        if (_queue.Count < _maxQueueLength)
+                        {
+                            enqueueTask = InternalEnqueueAsync(enqueueCancellationToken);
+                        }
+                        else if (_dropMode == DropMode.Head)
+                        {
+                            InternalDequeue(false);
 
-                        enqueueTask = InternalEnqueueAsync(enqueueCancellationToken);
+                            enqueueTask = InternalEnqueueAsync(enqueueCancellationToken);
+                        }
+                    }
+                    finally
+                    {
+                        _queueSemaphore.Release();
                     }
                 }
-                finally
-                {
-                    _queueSemaphore.Release();
-                }
+                catch (OperationCanceledException)
+                { }
             }
 
             return await enqueueTask;
