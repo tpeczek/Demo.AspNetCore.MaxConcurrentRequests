@@ -34,23 +34,25 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
         #endregion
 
         #region Methods
-        public Task<bool> EnqueueAsync(CancellationToken cancellationToken)
+        public Task<bool> EnqueueAsync(CancellationToken requestAbortedCancellationToken)
         {
             Task<bool> enqueueTask = _enqueueFailedTask;
 
             if (_maxQueueLength > 0)
             {
+                CancellationToken enqueueCancellationToken = GetEnqueueCancellationToken(requestAbortedCancellationToken);
+
                 lock (_lock)
                 {
                     if (_queue.Count < _maxQueueLength)
                     {
-                        enqueueTask = InternalEnqueueAsync(cancellationToken);
+                        enqueueTask = InternalEnqueueAsync(enqueueCancellationToken);
                     }
                     else if (_dropMode == DropMode.Head)
                     {
                         InternalDequeue(false);
 
-                        enqueueTask = InternalEnqueueAsync(cancellationToken);
+                        enqueueTask = InternalEnqueueAsync(enqueueCancellationToken);
                     }
                 }
             }
@@ -74,16 +76,16 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
             return dequeued;
         }
 
-        private Task<bool> InternalEnqueueAsync(CancellationToken cancellationToken)
+        private Task<bool> InternalEnqueueAsync(CancellationToken enqueueCancellationToken)
         {
             Task<bool> enqueueTask = _enqueueFailedTask;
 
-            TaskCompletionSource<bool> enqueueTaskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            CancellationToken enqueueCancellationToken = GetEnqueueCancellationToken(enqueueTaskCompletionSource, cancellationToken);
-
             if (!enqueueCancellationToken.IsCancellationRequested)
             {
+                TaskCompletionSource<bool> enqueueTaskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                enqueueCancellationToken.Register(CancelEnqueue, enqueueTaskCompletionSource);
+
                 _queue.AddLast(enqueueTaskCompletionSource);
                 enqueueTask = enqueueTaskCompletionSource.Task;
             }
@@ -91,19 +93,17 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
             return enqueueTask;
         }
 
-        private CancellationToken GetEnqueueCancellationToken(TaskCompletionSource<bool> enqueueTaskCompletionSource, CancellationToken cancellationToken)
+        private CancellationToken GetEnqueueCancellationToken(CancellationToken requestAbortedCancellationToken)
         {
             CancellationToken enqueueCancellationToken = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken,
-                GetTimeoutToken(enqueueTaskCompletionSource)
+                requestAbortedCancellationToken,
+                GetTimeoutToken()
             ).Token;
-
-            enqueueCancellationToken.Register(CancelEnqueue, enqueueTaskCompletionSource);
 
             return enqueueCancellationToken;
         }
 
-        private CancellationToken GetTimeoutToken(TaskCompletionSource<bool> enqueueTaskCompletionSource)
+        private CancellationToken GetTimeoutToken()
         {
             CancellationToken timeoutToken = CancellationToken.None;
 
@@ -112,7 +112,6 @@ namespace Demo.AspNetCore.MaxConcurrentRequests.Middlewares.Internals
                 CancellationTokenSource timeoutTokenSource = new CancellationTokenSource();
 
                 timeoutToken = timeoutTokenSource.Token;
-                timeoutToken.Register(CancelEnqueue, enqueueTaskCompletionSource);
 
                 timeoutTokenSource.CancelAfter(_maxTimeInQueue);
             }
