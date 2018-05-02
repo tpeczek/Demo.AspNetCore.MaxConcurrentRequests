@@ -1,8 +1,14 @@
 # Demo.AspNetCore.MaxConcurrentRequests
 
-Sample education project for demonstrating various approaches to implementing concurrent requests limit:
+Sample education project for demonstrating various approaches to implementing concurrent requests limit and requests queue in ASP.NET Core.
+
+The initial `lock` statement based implementation has been described here:
 
 - [Implementing concurrent requests limit in ASP.NET Core for fun and education](http://www.tpeczek.com/2017/08/implementing-concurrent-requests-limit.html)
+
+Since that time there's been a number of bug fixes and improvments.
+
+There is also a second, `SemaphoreSlim` based, implementation available in [branch](https://github.com/tpeczek/Demo.AspNetCore.MaxConcurrentRequests/tree/semaphoreslim-based-synchronization).
 
 ## Donating
 
